@@ -36,6 +36,8 @@ flash_get_page_size(uint32_t addr)
         return 2 * 1024;
     } else if (CONFIG_MACH_STM32H7) {
         return 128 * 1024;
+    } else if (CONFIG_MACH_N32G45X) {
+        return 2 * 1024;
     }
 }
 
@@ -110,6 +112,15 @@ erase_page(uint32_t page_address)
     FLASH->CR = FLASH_CR_PER;
     FLASH->AR = page_address;
     FLASH->CR = FLASH_CR_PER | FLASH_CR_STRT;
+#elif CONFIG_MACH_N32G45X
+    // Clear any pending error flags before issuing the erase command.
+    // If error bits are left set the BUSY flag may not clear after the
+    // operation, causing wait_flash() to spin forever.
+    FLASH->STS = (FLASH_STS_PGERR | FLASH_STS_PVERR
+                  | FLASH_STS_WRPERR | FLASH_STS_EVERR);
+    FLASH->CTRL = FLASH_CTRL_PER;
+    FLASH->ADD  = page_address;
+    FLASH->CTRL = FLASH_CTRL_PER | FLASH_CTRL_START;
 #elif CONFIG_MACH_STM32G0 || CONFIG_MACH_STM32G4
     uint32_t pidx = (page_address - 0x08000000) / (2 * 1024);
     if (pidx >= 64) {
@@ -150,6 +161,18 @@ write_block(uint32_t block_address, uint32_t *data)
         writew(&page[i], data16[i]);
         wait_flash();
     }
+#elif CONFIG_MACH_N32G45X
+    // N32G45X SMPSEL=0 (default): large-capacity mode — one 32-bit word per
+    // program cycle.  Half-word writes (SMPSEL=1) cause PGERR on this MCU.
+    // Clear error flags first, then program word-by-word.
+    uint32_t *page = (void*)block_address;
+    FLASH->CTRL = FLASH_CTRL_PG;  // SMPSEL=0 is the reset default
+    for (int i = 0; i < CONFIG_BLOCK_SIZE / 4; i++) {
+        FLASH->STS = (FLASH_STS_PGERR | FLASH_STS_PVERR | FLASH_STS_WRPERR);
+        writel(&page[i], data[i]);
+        wait_flash();
+    }
+    FLASH->CTRL = 0;
 #elif CONFIG_MACH_STM32G0 || CONFIG_MACH_STM32G4
     uint32_t *page = (void*)block_address;
     FLASH->CR = FLASH_CR_PG;

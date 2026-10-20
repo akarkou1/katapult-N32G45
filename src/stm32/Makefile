@@ -11,6 +11,7 @@ dirs-$(CONFIG_MACH_STM32F4) += lib/stm32f4
 dirs-$(CONFIG_MACH_STM32G0) += lib/stm32g0
 dirs-$(CONFIG_MACH_STM32G4) += lib/stm32g4
 dirs-$(CONFIG_MACH_STM32H7) += lib/stm32h7
+dirs-$(CONFIG_MACH_N32G45X) += lib/n32g45x
 
 MCU := $(shell echo $(CONFIG_MCU))
 MCU_UPPER := $(shell echo $(CONFIG_MCU) | tr a-z A-Z | tr X x)
@@ -22,6 +23,7 @@ CFLAGS-$(CONFIG_MACH_STM32F4) += -mcpu=cortex-m4 -Ilib/stm32f4/include
 CFLAGS-$(CONFIG_MACH_STM32G0) += -mcpu=cortex-m0plus -Ilib/stm32g0/include
 CFLAGS-$(CONFIG_MACH_STM32G4) += -mcpu=cortex-m4 -Ilib/stm32g4/include
 CFLAGS-$(CONFIG_MACH_STM32H7) += -mcpu=cortex-m7 -Ilib/stm32h7/include
+CFLAGS-$(CONFIG_MACH_N32G45X) += -mcpu=cortex-m4 -Ilib/n32g45x/include -DN32G45x
 CFLAGS += $(CFLAGS-y) -D$(MCU_UPPER) -mthumb -Ilib/cmsis-core -Ilib/fast-hash
 
 CFLAGS_katapult.elf += -nostdlib -lgcc -lc_nano
@@ -38,11 +40,13 @@ mcu-$(CONFIG_MACH_STM32F4) += stm32/stm32f4.c ../lib/stm32f4/system_stm32f4xx.c
 mcu-$(CONFIG_MACH_STM32G0) += stm32/stm32g0.c
 mcu-$(CONFIG_MACH_STM32G4) += stm32/stm32g4.c ../lib/stm32g4/system_stm32g4xx.c
 mcu-$(CONFIG_MACH_STM32H7) += stm32/stm32h7.c ../lib/stm32h7/system_stm32h7xx.c
+mcu-$(CONFIG_MACH_N32G45X) += stm32/n32g45x.c ../lib/n32g45x/system_n32g45x.c
 timer-src-y := generic/armcm_timer.c
 timer-src-$(CONFIG_MACH_STM32F0) := stm32/stm32f0_timer.c
 timer-src-$(CONFIG_MACH_STM32G0) := stm32/stm32f0_timer.c
 gpio-src-y := stm32/gpio.c stm32/gpioperiph.c
 gpio-src-$(CONFIG_MACH_STM32F1) := stm32/gpio.c
+gpio-src-$(CONFIG_MACH_N32G45X) := stm32/gpio.c
 mcu-y += $(timer-src-y) $(gpio-src-y)
 src-y += generic/armcm_canboot.c $(mcu-y)
 serial-src-y := stm32/serial.c

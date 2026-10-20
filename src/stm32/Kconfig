@@ -87,6 +87,8 @@ choice
     config MACH_STM32L412
         bool "STM32L412" if 0
         select MACH_STM32L4
+    config MACH_N32G45X
+        bool "N32G45x"
 endchoice
 
 config MACH_STM32F103x6
@@ -118,13 +120,13 @@ config MACH_STM32L4
 config HAVE_STM32_USBFS
     bool
     default y if MACH_STM32F0x2 || MACH_STM32G0Bx || MACH_STM32L4 || MACH_STM32G4
-    default y if (MACH_STM32F103 || MACH_STM32F070) && !STM32_CLOCK_REF_INTERNAL
+    default y if (MACH_STM32F103 || MACH_STM32F070 || MACH_N32G45X) && !STM32_CLOCK_REF_INTERNAL
 config HAVE_STM32_USBOTG
     bool
     default y if MACH_STM32F2 || MACH_STM32F4 || MACH_STM32H7
 config HAVE_STM32_CANBUS
     bool
-    default y if MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4x5 || MACH_STM32F446 || MACH_STM32F0x2
+    default y if MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4x5 || MACH_STM32F446 || MACH_STM32F0x2 || MACH_N32G45X
 config HAVE_STM32_FDCANBUS
     bool
     default y if MACH_STM32G0B1 || MACH_STM32H7 || MACH_STM32G4
@@ -151,6 +153,7 @@ config MCU
     default "stm32h743xx" if MACH_STM32H743
     default "stm32h750xx" if MACH_STM32H750
     default "stm32l412xx" if MACH_STM32L412
+    default "n32g45x" if MACH_N32G45X
 
 config CLOCK_FREQ
     int
@@ -166,6 +169,8 @@ config CLOCK_FREQ
     default 400000000 if MACH_STM32H7 && !MACH_STM32H750
     default 480000000 if MACH_STM32H750
     default 80000000 if MACH_STM32L412
+    default 128000000 if MACH_N32G45X && STM32_CLOCK_REF_INTERNAL
+    default 144000000 if MACH_N32G45X
 
 config FLASH_SIZE
     hex
@@ -174,7 +179,7 @@ config FLASH_SIZE
     default 0x20000 if MACH_STM32F070 || MACH_STM32F072
     default 0x10000 if MACH_STM32F103 || MACH_STM32L412 # Flash size of stm32f103x8 (64KiB)
     default 0x40000 if MACH_STM32F2 || MACH_STM32F401 || MACH_STM32H723
-    default 0x80000 if MACH_STM32F4x5 || MACH_STM32F446
+    default 0x80000 if MACH_STM32F4x5 || MACH_STM32F446 || MACH_N32G45X
     default 0x20000 if MACH_STM32G0 || MACH_STM32G431
     default 0x20000 if MACH_STM32H750
     default 0x200000 if MACH_STM32H743
@@ -197,11 +202,9 @@ config RAM_SIZE
     default 0x5000 if MACH_STM32F103 && !MACH_STM32F103x6 # Ram size of stm32f103x8
     default 0x8000 if MACH_STM32G431
     default 0xa000 if MACH_STM32L412
-    default 0x20000 if MACH_STM32F207
     default 0x10000 if MACH_STM32F401
-    default 0x20000 if MACH_STM32F4x5 || MACH_STM32F446
+    default 0x20000 if MACH_STM32F4x5 || MACH_STM32F446 || MACH_STM32F207 || MACH_STM32H7 || MACH_N32G45X
     default 0x24000 if MACH_STM32G0Bx
-    default 0x20000 if MACH_STM32H7
 
 config STACK_SIZE
     int
@@ -222,7 +225,7 @@ config STM32_DFU_ROM_ADDRESS
     default 0 if !USB
     default 0x1fffc400 if MACH_STM32F042
     default 0x1fffc800 if MACH_STM32F072
-    default 0x1fff0000 if MACH_STM32F4 || MACH_STM32G0 || MACH_STM32G4 || MACH_STM32L4
+    default 0x1fff0000 if MACH_STM32F4 || MACH_STM32G0 || MACH_STM32G4 || MACH_STM32L4 || MACH_N32G45X
     default 0x1ff09800 if MACH_STM32H7
     default 0
 
@@ -236,7 +239,7 @@ choice
     config STM32_FLASH_START_0000
         bool "Do not build"
     config STM32_FLASH_START_2000
-        bool "8KiB bootloader" if MACH_STM32F103 || MACH_STM32F070 || MACH_STM32G0 || MACH_STM32F0x2 || MACH_STM32G4
+        bool "8KiB bootloader" if MACH_STM32F103 || MACH_STM32F070 || MACH_STM32G0 || MACH_STM32F0x2 || MACH_STM32G4 || MACH_N32G45X
     config STM32_FLASH_START_5000
         bool "20KiB bootloader" if MACH_STM32F103
     config STM32_FLASH_START_7000
@@ -494,16 +497,17 @@ config FLASH_START
 
 choice
     prompt "Application start offset"
+    default STM32_APP_START_2000
     config STM32_APP_START_20000
         bool "128KiB offset" if MACH_STM32H7 && !MACH_STM32H750
     config STM32_APP_START_8000
-        bool "32KiB offset" if MACH_STM32F2 || MACH_STM32F4 || MACH_STM32H750
+        bool "32KiB offset" if MACH_STM32F2 || MACH_STM32F4 || MACH_STM32H750 || MACH_N32G45X
     config STM32_APP_START_4000
-        bool "16KiB offset" if MACH_STM32F2 || MACH_STM32F4
+        bool "16KiB offset" if MACH_STM32F2 || MACH_STM32F4 || MACH_N32G45X
     config STM32_APP_START_2000
-        bool "8KiB offset" if MACH_STM32F0 || MACH_STM32F1 || MACH_STM32G0 || MACH_STM32G4
+        bool "8KiB offset" if MACH_STM32F0 || MACH_STM32F1 || MACH_STM32G0 || MACH_STM32G4 || MACH_N32G45X
     config STM32_APP_START_1000
-        bool "4KiB offset" if MACH_STM32F0 || MACH_STM32F1 || MACH_STM32G0
+        bool "4KiB offset" if MACH_STM32F0 || MACH_STM32F1 || MACH_STM32G0 || MACH_N32G45X
 endchoice
 
 config LAUNCH_APP_ADDRESS
