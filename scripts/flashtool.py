@@ -89,6 +89,15 @@ KLIPPER_USB_ID = "1d50:614e"
 GS_CAN_USB_ID = "1d50:606f"
 SERIAL_BL_REQ = b"~ \x1c Request Serial Bootloader!! ~"
 
+# MCU compatibility map: maps a Katapult-reported MCU name to the set of
+# Klipper binary MCU names that are binary-compatible with it.  This allows
+# drop-in replacement MCUs (e.g. N32G45X is a pin/register-compatible clone
+# of the STM32F103) to flash Klipper binaries built for the original part.
+MCU_COMPAT_MAP: Dict[str, List[str]] = {
+    # Nations N32G45x is binary-compatible with STM32F103
+    "n32g45x": ["stm32f103xe", "stm32f103x8", "stm32f103xb"],
+}
+
 class FlashError(Exception):
     pass
 
@@ -304,12 +313,21 @@ class CanFlasher:
         if self.klipper_dict is not None:
             bin_mcu = self.klipper_dict.get("config", {}).get("MCU", "")
             if bin_mcu and bin_mcu != mcu_type:
-                raise FlashError(
-                    "MCU returned by Katapult does not match MCU "
-                    "identified in klipper.bin.\n"
-                    f"Katapult MCU: {mcu_type}\n"
-                    f"Klipper Binary MCU: {bin_mcu}"
-                )
+                # Check if the Katapult MCU is a known-compatible substitute
+                # for the MCU the Klipper binary was built for.
+                compat_targets = MCU_COMPAT_MAP.get(mcu_type, [])
+                if bin_mcu in compat_targets:
+                    output_line(
+                        f"Note: Katapult MCU '{mcu_type}' is compatible with "
+                        f"Klipper binary MCU '{bin_mcu}' — proceeding."
+                    )
+                else:
+                    raise FlashError(
+                        "MCU returned by Katapult does not match MCU "
+                        "identified in klipper.bin.\n"
+                        f"Katapult MCU: {mcu_type}\n"
+                        f"Klipper Binary MCU: {bin_mcu}"
+                    )
 
     async def verify_canbus_uuid(self, uuid):
         output_line("Verifying canbus connection")
