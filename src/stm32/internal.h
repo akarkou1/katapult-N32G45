@@ -24,7 +24,7 @@
 #include "n32g45x.h"
 #endif
 
-
+#if CONFIG_MACH_N32G45X
 // 1. Map Nation's *_Module struct types to STM32 *_TypeDef names
 typedef GPIO_Module  GPIO_TypeDef;
 typedef USART_Module USART_TypeDef;
@@ -65,10 +65,6 @@ typedef PWR_Module   PWR_TypeDef;
 #endif
 
 // 2b. N32G45X FLASH struct member aliases: map STM32 names -> N32 names
-// The N32G45X FLASH_Module uses AC/KEY/STS/CTRL/ADD instead of
-// ACR/KEYR/SR/CR/AR used by STM32 parts.  These aliases let flash.c
-// use the canonical STM32 names on both families.
-#if CONFIG_MACH_N32G45X
 #define SR   STS
 #define CR   CTRL
 #define KEYR KEY
@@ -89,14 +85,11 @@ typedef PWR_Module   PWR_TypeDef;
 #ifndef FLASH_AC_PRFTBFE
 #define FLASH_AC_PRFTBFE FLASH_AC_PRFTBFEN
 #endif
-#endif
 
 // 3. CAN additional aliases for can.c (N32G45X)
-#if CONFIG_MACH_N32G45X
 // --- Type aliases: STM32 names -> N32G45X names ---
 typedef CAN_TxMailBox_Param    CAN_TxMailBox_TypeDef;
 typedef CAN_FIFOMailBox_Param  CAN_FIFOMailBox_TypeDef;
-typedef CAN_Module             CAN_TypeDef;
 
 // --- MCU-selection defines used in can.c ---
 #define SOC_CAN         CAN1
@@ -132,9 +125,8 @@ typedef CAN_Module             CAN_TypeDef;
 #define CAN_RDT0R_DLC   CAN_RMDT0_DLC
 // Filter Management Register
 #define CAN_FMR_CAN2SB  ((uint32_t)0x00003F00)  /* CAN2 start bank bits [13:8] */
-#endif // CONFIG_MACH_N32G45X
 
-// 3. GPIO register aliases for stm32/gpio.c
+// 4. GPIO register aliases for stm32/gpio.c
 #define CRL  PL_CFG
 #define CRH  PH_CFG
 #define IDR  PID
@@ -262,6 +254,9 @@ typedef CAN_Module             CAN_TypeDef;
 #define USB_EP_TX_STALL  ((uint16_t)0x0010)
 #define USB_EP_TX_NAK    ((uint16_t)0x0020)
 #define USB_EP_TX_VALID  ((uint16_t)0x0030)
+
+#endif // CONFIG_MACH_N32G45X
+
 // gpio.c
 extern GPIO_TypeDef * const digital_regs[];
 #define GPIO(PORT, NUM) (((PORT)-'A') * 16 + (NUM))

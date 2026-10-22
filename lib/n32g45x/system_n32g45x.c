@@ -319,7 +319,7 @@ void SystemCoreClockUpdate(void)
  * @brief  Configures the System clock frequency, HCLK, PCLK2 and PCLK1
  * prescalers.
  */
-static void SetSysClock(void)
+static void __attribute__((unused)) SetSysClock(void)
 {
     volatile uint32_t rcc_cfgr       = 0;
     volatile bool HSEStatus          = 0;

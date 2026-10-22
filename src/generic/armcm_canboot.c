@@ -23,7 +23,7 @@ extern uint32_t _stack_end;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored  "-Warray-bounds"
 
-uint64_t
+uint64_t __attribute__((weak))
 get_bootup_code(void)
 {
     uint64_t *req_code = (void*)&_stack_end;
@@ -43,7 +43,7 @@ boot_set_bootup_code(uint64_t code)
 
 #pragma GCC diagnostic pop
 
-void
+void __attribute__((weak))
 set_bootup_code(uint64_t code)
 {
     boot_set_bootup_code(code);

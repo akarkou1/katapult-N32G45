@@ -9,13 +9,145 @@
 #include "board/misc.h" // bootloader_request
 #include "internal.h" // enable_pclock
 #include "sched.h" // sched_main
+#include "canboot.h" // REQUEST_CANBOOT, get_bootup_code
+
+/****************************************************************
+ * Compile-time clock validation
+ ****************************************************************/
+
+#if !CONFIG_STM32_CLOCK_REF_INTERNAL \
+    && (2 * CONFIG_CLOCK_FREQ) % CONFIG_CLOCK_REF_FREQ
+  #error "Unable to generate the requested clock rate from this crystal"
+#endif
+
+#if CONFIG_USB && CONFIG_CLOCK_FREQ != 144000000 \
+    && CONFIG_CLOCK_FREQ != 96000000 \
+    && CONFIG_CLOCK_FREQ != 72000000 \
+    && CONFIG_CLOCK_FREQ != 48000000
+  #error "Unable to generate a 48Mhz usb clock at this system clock rate"
+#endif
+
+
+/****************************************************************
+ * BKP-register boot-code storage
+ *
+ * NVIC_SystemReset() is a "local" (software) reset that preserves SRAM, but
+ * Cortex-M write buffering means a store to Normal memory may not reach SRAM
+ * before the reset if no DSB is executed. Klipper (compiled for stm32f103xe)
+ * calls try_request_canboot() from its own armcm_reset.c which may lack the
+ * DSB barrier, causing the REQUEST_CANBOOT value to be lost.
+ *
+ * The N32G45X Backup Domain registers (BKP->DAT1..DAT4) are Device-type
+ * memory; writes to them are never buffered and are always committed before
+ * the next instruction, so they survive a system reset without any ordering
+ * hazard.
+ ****************************************************************/
+
+// Enable write access to the backup domain.
+static void
+bkp_enable_write(void)
+{
+    // Enable PWR and BKP peripheral clocks
+    RCC->APB1PCLKEN |= RCC_APB1PCLKEN_PWREN | RCC_APB1PCLKEN_BKPEN;
+    // Set DBP (Disable Backup write Protection) bit
+    PWR->CTRL |= PWR_CTRL_DBKP;
+}
+
+// Disable write access (restore write protection).
+static void
+bkp_disable_write(void)
+{
+    PWR->CTRL &= ~PWR_CTRL_DBKP;
+}
+
+// Write a 64-bit value into BKP registers DAT1..DAT4 (caller must enable write)
+static void
+bkp_write_u64(uint64_t code)
+{
+    BKP->DAT1 = (uint16_t)(code        & 0xFFFF);
+    BKP->DAT2 = (uint16_t)((code >> 16) & 0xFFFF);
+    BKP->DAT3 = (uint16_t)((code >> 32) & 0xFFFF);
+    BKP->DAT4 = (uint16_t)((code >> 48) & 0xFFFF);
+}
+
+// Forward declaration – _stack_end is the linker symbol used by the generic
+// armcm_canboot.c implementation; we reuse the same address as a RAM fallback
+// for Klipper (stm32f103xe) compatibility.
+extern uint32_t _stack_end;
+
+// Read the 64-bit boot code.
+//
+// Primary source: BKP registers DAT1-DAT4 (device memory, no write-buffering).
+// Fallback source: RAM word at _stack_end (written by Klipper's own copy of
+//   try_request_canboot() which writes to bl_vectors[0] == &_stack_end).
+//   If the RAM value is non-zero we migrate it into BKP and clear RAM so that
+//   stale RAM words from previous boots are never misread.
+uint64_t
+get_bootup_code(void)
+{
+    // Temporarily enable BKP clock (DBP is only needed for writes)
+    uint32_t saved_apb1 = RCC->APB1PCLKEN;
+    RCC->APB1PCLKEN |= RCC_APB1PCLKEN_BKPEN;
+
+    uint64_t bkp_code = ((uint64_t)BKP->DAT1)
+                       | ((uint64_t)BKP->DAT2 << 16)
+                       | ((uint64_t)BKP->DAT3 << 32)
+                       | ((uint64_t)BKP->DAT4 << 48);
+
+    // Also read the RAM location that Klipper's try_request_canboot() writes.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+    volatile uint64_t *ram_sig = (volatile uint64_t *)&_stack_end;
+    uint64_t ram_code = *ram_sig;
+#pragma GCC diagnostic pop
+
+    uint64_t code = bkp_code;
+
+    if (ram_code == REQUEST_CANBOOT || (bkp_code == 0 && ram_code != 0)) {
+        // Klipper explicitly requested the bootloader via RAM, or BKP is empty
+        // while RAM holds a boot signature. Migrate it into BKP so subsequent
+        // reads within bootentry_check() see it, and clear RAM.
+        bkp_enable_write();
+        bkp_write_u64(ram_code);
+        bkp_disable_write();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+        *ram_sig = 0;
+#pragma GCC diagnostic pop
+        __DSB();
+        code = ram_code;
+    }
+
+    RCC->APB1PCLKEN = saved_apb1;
+    return code;
+}
+
+// Write the 64-bit boot code to BKP registers DAT1..DAT4.
+// Also clear the RAM fallback location so a stale RAM value is never
+// misread as a boot request on the next call to get_bootup_code().
+void
+set_bootup_code(uint64_t code)
+{
+    bkp_enable_write();
+    bkp_write_u64(code);
+    bkp_disable_write();
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+    volatile uint64_t *ram_sig = (volatile uint64_t *)&_stack_end;
+    *ram_sig = 0;
+#pragma GCC diagnostic pop
+    __DSB();
+}
+
 
 /****************************************************************
  * Clock setup
  ****************************************************************/
 
-#define FREQ_APB1 (CONFIG_CLOCK_FREQ / 4) // Max 36 MHz at 144 MHz SYSCLK
-#define FREQ_APB2 (CONFIG_CLOCK_FREQ / 2) // Max 72 MHz at 144 MHz SYSCLK
+// The N32G45x adds a third PWR control register at offset 0x0c holding the
+// "ex mode" enable bit required to clock ADC, SDIO, QSPI, OPAMP, COMP, & CAN2.
+#define N32_PWR_CTRL3 (*(volatile uint32_t *)(PWR_BASE + 0x0c))
 
 // Map a peripheral address to its enable and reset bits
 struct cline
@@ -51,9 +183,18 @@ lookup_clock_line(uint32_t periph_base)
 uint32_t
 get_pclock_frequency(uint32_t periph_base)
 {
-    if (periph_base >= APB2PERIPH_BASE)
-        return FREQ_APB2;
-    return FREQ_APB1;
+    if (periph_base >= APB2PERIPH_BASE) {
+        // APB2 (PCLK2) is rated up to 72MHz max
+        if (CONFIG_CLOCK_FREQ > 72000000)
+            return CONFIG_CLOCK_FREQ / 2;
+        return CONFIG_CLOCK_FREQ;
+    }
+    // APB1 (PCLK1) is rated up to 36MHz max
+    if (CONFIG_CLOCK_FREQ > 72000000)
+        return CONFIG_CLOCK_FREQ / 4;
+    if (CONFIG_CLOCK_FREQ > 36000000)
+        return CONFIG_CLOCK_FREQ / 2;
+    return CONFIG_CLOCK_FREQ;
 }
 
 // Enable a GPIO peripheral clock
@@ -62,13 +203,20 @@ gpio_clock_enable(GPIO_TypeDef *regs)
 {
     uint32_t rcc_pos = ((uint32_t)regs - APB2PERIPH_BASE) / 0x400;
     RCC->APB2PCLKEN |= 1 << rcc_pos;
-    RCC->APB2PCLKEN;
+    (void)RCC->APB2PCLKEN;
 }
 
 static void
 clock_setup(void)
 {
-    // Ensure HSI is enabled (required for Flash operations) and selected before configuring PLL
+    // Enable N32G45x "ex mode" in PWR_CTRL3 so ADC, SDIO, QSPI, OPAMP, COMP,
+    // and CAN2 RCC enable bits are ungated even if SystemInit() did not set it.
+    RCC->APB1PCLKEN |= RCC_APB1PCLKEN_PWREN;
+    N32_PWR_CTRL3 |= 1;
+    RCC->APB1PCLKEN &= ~RCC_APB1PCLKEN_PWREN;
+
+    // Ensure HSI is enabled (required for Flash operations) and selected
+    // as the active system clock before disabling and reconfiguring the PLL.
     RCC->CTRL |= RCC_CTRL_HSIEN;
     while (!(RCC->CTRL & RCC_CTRL_HSIRDF))
         ;
@@ -98,14 +246,20 @@ clock_setup(void)
         mult = CONFIG_CLOCK_FREQ / (HSI_VALUE / 2);
     }
 
-    // Encode 5-bit PLLMULFCT (same logic as SetSysClock in system_n32g45x.c)
+    // Encode 5-bit PLLMULFCT (multipliers 2..16 vs 17..32)
     if (mult <= 16)
         cfg |= (mult - 2) << 18;
     else
         cfg |= ((mult - 17) << 18) | RCC_CFG_PLLMULFCT_4;
 
-    // AHB = SYSCLK, APB2 = HCLK/2 (max 72MHz), APB1 = HCLK/4 (max 36MHz)
-    cfg |= RCC_CFG_AHBPRES_DIV1 | RCC_CFG_APB2PRES_DIV2 | RCC_CFG_APB1PRES_DIV4;
+    // Dynamically scale APB2 (max 72MHz) and APB1 (max 36MHz) prescalers
+    cfg |= RCC_CFG_AHBPRES_DIV1;
+    if (CONFIG_CLOCK_FREQ > 72000000)
+        cfg |= RCC_CFG_APB2PRES_DIV2 | RCC_CFG_APB1PRES_DIV4;
+    else if (CONFIG_CLOCK_FREQ > 36000000)
+        cfg |= RCC_CFG_APB2PRES_DIV1 | RCC_CFG_APB1PRES_DIV2;
+    else
+        cfg |= RCC_CFG_APB2PRES_DIV1 | RCC_CFG_APB1PRES_DIV1;
 
     // Configure 48MHz USB clock prescaler
     if (CONFIG_USB) {
@@ -136,9 +290,21 @@ clock_setup(void)
         ;
 }
 
+
 /****************************************************************
  * GPIO setup
  ****************************************************************/
+
+// Bitmasks for standard AFIO->RMP_CFG remappings shared with STM32F1 MAPR
+#define N32_RMP_SPI1_MSK        (1U << 0)
+#define N32_RMP_I2C1_MSK        (1U << 1)
+#define N32_RMP_TIM2_MSK        (3U << 8)
+#define N32_RMP_TIM2_PARTIAL1   (1U << 8)
+#define N32_RMP_TIM2_PARTIAL2   (2U << 8)
+#define N32_RMP_TIM3_MSK        (3U << 10)
+#define N32_RMP_TIM3_PARTIAL    (2U << 10)
+#define N32_RMP_TIM3_FULL       (3U << 10)
+#define N32_RMP_TIM4_MSK        (1U << 12)
 
 static void
 n32g45x_alternative_remap(uint32_t rmp_mask, uint32_t rmp_value)
@@ -189,7 +355,32 @@ gpio_peripheral(uint32_t gpio, uint32_t mode, int pullup)
                                   AFIO_RMP_CFG_SW_JTAG_CFG_DISABLE);
 
     uint32_t func = (mode >> 4) & 0xf;
-    if (func == 7) {
+    if (func == 1) {
+        // TIM2 remapping
+        if (gpio == GPIO('A', 15) || gpio == GPIO('B', 3))
+            n32g45x_alternative_remap(N32_RMP_TIM2_MSK, N32_RMP_TIM2_PARTIAL1);
+        else if (gpio == GPIO('B', 10) || gpio == GPIO('B', 11))
+            n32g45x_alternative_remap(N32_RMP_TIM2_MSK, N32_RMP_TIM2_PARTIAL2);
+    } else if (func == 2) {
+        // TIM3 and TIM4 remapping
+        if (gpio == GPIO('B', 4) || gpio == GPIO('B', 5))
+            n32g45x_alternative_remap(N32_RMP_TIM3_MSK, N32_RMP_TIM3_PARTIAL);
+        else if (gpio == GPIO('C', 6) || gpio == GPIO('C', 7)
+                 || gpio == GPIO('C', 8) || gpio == GPIO('C', 9))
+            n32g45x_alternative_remap(N32_RMP_TIM3_MSK, N32_RMP_TIM3_FULL);
+        else if (gpio == GPIO('D', 12) || gpio == GPIO('D', 13)
+                 || gpio == GPIO('D', 14) || gpio == GPIO('D', 15))
+            n32g45x_alternative_remap(N32_RMP_TIM4_MSK, N32_RMP_TIM4_MSK);
+    } else if (func == 4) {
+        // I2C1 remapping
+        if (gpio == GPIO('B', 8) || gpio == GPIO('B', 9))
+            n32g45x_alternative_remap(N32_RMP_I2C1_MSK, N32_RMP_I2C1_MSK);
+    } else if (func == 5) {
+        // SPI1 remapping
+        if (gpio == GPIO('B', 3) || gpio == GPIO('B', 4)
+            || gpio == GPIO('B', 5))
+            n32g45x_alternative_remap(N32_RMP_SPI1_MSK, N32_RMP_SPI1_MSK);
+    } else if (func == 7) {
         // USART1/2/3 remapping
         if (gpio == GPIO('B', 6) || gpio == GPIO('B', 7))
             n32g45x_alternative_remap(AFIO_RMP_CFG_USART1_RMP,
@@ -210,6 +401,7 @@ gpio_peripheral(uint32_t gpio, uint32_t mode, int pullup)
                                       AFIO_RMP_CFG_CAN1_RMP_RMP3);
     }
 }
+
 
 /****************************************************************
  * Bootloader & Startup
